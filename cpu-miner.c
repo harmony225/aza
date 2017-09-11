@@ -138,7 +138,7 @@ static bool opt_background = false;
 static bool opt_quiet = false;
 static int opt_retries = -1;
 static int opt_fail_pause = 10;
-bool jsonrpc_2 = false;
+static int jsonrpc_2 = false;
 int opt_timeout = 0;
 static int opt_scantime = 5;
 static json_t *opt_config;
@@ -274,6 +274,15 @@ static struct option const options[] = {
         { 0, 0, 0, 0 }
 };
 
+struct work {
+    uint32_t data[32];
+    uint32_t target[8];
+
+    char *job_id;
+    size_t xnonce2_len;
+    unsigned char *xnonce2;
+};
+
 static struct work g_work;
 static time_t g_work_time;
 static pthread_mutex_t g_work_lock;
@@ -377,7 +386,7 @@ static bool jobj_binary(const json_t *obj, const char *key, void *buf,
     return true;
 }
 
-bool rpc2_job_decode(const json_t *job, struct work *work) {
+static bool rpc2_job_decode(const json_t *job, struct work *work) {
     if (!jsonrpc_2) {
         applog(LOG_ERR, "Tried to decode job without JSON-RPC 2.0");
         return false;
@@ -405,7 +414,6 @@ bool rpc2_job_decode(const json_t *job, struct work *work) {
         char *blob = malloc(blobLen / 2);
         if (!hex2bin(blob, hexblob, blobLen / 2)) {
             applog(LOG_ERR, "JSON inval blob");
-            pthread_mutex_unlock(&rpc2_job_lock);
             goto err_out;
         }
         if (rpc2_blob) {
@@ -426,7 +434,7 @@ bool rpc2_job_decode(const json_t *job, struct work *work) {
                 hashrate += thr_hashrates[i];
             pthread_mutex_unlock(&stats_lock);
             double difficulty = (((double) 0xffffffff) / target);
-            applog(LOG_INFO, "Pool set diff to %g", difficulty);
+            applog(LOG_INFO, "[JSON-RPC] diff set to %g", difficulty);
             rpc2_target = target;
         }
 
@@ -451,6 +459,7 @@ bool rpc2_job_decode(const json_t *job, struct work *work) {
     return true;
 
     err_out:
+    pthread_mutex_unlock(&rpc2_job_lock);
     return false;
 }
 
@@ -480,7 +489,7 @@ static bool work_decode(const json_t *val, struct work *work) {
     err_out: return false;
 }
 
-bool rpc2_login_decode(const json_t *val) {
+static bool login_decode(const json_t *val) {
     const char *id;
     const char *s;
 
@@ -519,6 +528,12 @@ bool rpc2_login_decode(const json_t *val) {
     }
     if(strcmp(s, "OK")) {
         applog(LOG_ERR, "JSON returned status \"%s\"", s);
+        return false;
+    }
+
+    json_t *job = json_object_get(res, "job");
+
+    if(!rpc2_job_decode(job, &g_work)) {
         return false;
     }
 
@@ -578,32 +593,17 @@ static bool submit_upstream_work(CURL *curl, struct work *work) {
         uint32_t ntime, nonce;
         char *ntimestr, *noncestr, *xnonce2str;
 
-        if (jsonrpc_2) {
-            noncestr = bin2hex(((const unsigned char*)work->data) + 39, 4);
-            char hash[32];
-            switch(opt_algo) {
-            case ALGO_CRYPTONIGHT:
-            default:
-                cryptonight_hash(hash, work->data, 76);
-            }
-            char *hashhex = bin2hex(hash, 32);
-            snprintf(s, JSON_BUF_LEN,
-                    "{\"method\": \"submit\", \"params\": {\"id\": \"%s\", \"job_id\": \"%s\", \"nonce\": \"%s\", \"result\": \"%s\"}, \"id\":1}\r\n",
-                    rpc2_id, work->job_id, noncestr, hashhex);
-            free(hashhex);
-        } else {
-            le32enc(&ntime, work->data[17]);
-            le32enc(&nonce, work->data[19]);
-            ntimestr = bin2hex((const unsigned char *) (&ntime), 4);
-            noncestr = bin2hex((const unsigned char *) (&nonce), 4);
-            xnonce2str = bin2hex(work->xnonce2, work->xnonce2_len);
-            snprintf(s, JSON_BUF_LEN,
-                    "{\"method\": \"mining.submit\", \"params\": [\"%s\", \"%s\", \"%s\", \"%s\", \"%s\"], \"id\":4}",
-                    rpc_user, work->job_id, xnonce2str, ntimestr, noncestr);
-            free(ntimestr);
-            free(xnonce2str);
-        }
+        le32enc(&ntime, work->data[17]);
+        le32enc(&nonce, work->data[19]);
+        ntimestr = bin2hex((const unsigned char *) (&ntime), 4);
+        noncestr = bin2hex((const unsigned char *) (&nonce), 4);
+        xnonce2str = bin2hex(work->xnonce2, work->xnonce2_len);
+        snprintf(s, JSON_BUF_LEN,
+                "{\"method\": \"mining.submit\", \"params\": [\"%s\", \"%s\", \"%s\", \"%s\", \"%s\"], \"id\":4}",
+                rpc_user, work->job_id, xnonce2str, ntimestr, noncestr);
+        free(ntimestr);
         free(noncestr);
+        free(xnonce2str);
 
         if (unlikely(!stratum_send_line(&stratum, s))) {
             applog(LOG_ERR, "submit_upstream_work stratum_send_line failed");
@@ -732,17 +732,7 @@ static bool rpc2_login(CURL *curl) {
 
 //    applog(LOG_DEBUG, "JSON value: %s", json_dumps(val, 0));
 
-    rc = rpc2_login_decode(val);
-
-    json_t *result = json_object_get(val, "result");
-
-    if(!result) goto end;
-
-    json_t *job = json_object_get(result, "job");
-
-    if(!rpc2_job_decode(job, &g_work)) {
-        goto end;
-    }
+    rc = login_decode(val);
 
     if (opt_debug && rc) {
         timeval_subtract(&diff, &tv_end, &tv_start);
@@ -854,7 +844,7 @@ static void *workio_thread(void *userdata) {
         return NULL ;
     }
 
-    if(!have_stratum) {
+    if(jsonrpc_2) {
         ok = workio_login(curl);
     }
 
@@ -963,55 +953,48 @@ static void stratum_gen_work(struct stratum_ctx *sctx, struct work *work) {
 
     pthread_mutex_lock(&sctx->work_lock);
 
-    if (jsonrpc_2) {
-        free(work->job_id);
-        memcpy(work, &sctx->work, sizeof(struct work));
-        work->job_id = strdup(sctx->work.job_id);
-        pthread_mutex_unlock(&sctx->work_lock);
-    } else {
-        free(work->job_id);
-        work->job_id = strdup(sctx->job.job_id);
-        work->xnonce2_len = sctx->xnonce2_size;
-        work->xnonce2 = realloc(work->xnonce2, sctx->xnonce2_size);
-        memcpy(work->xnonce2, sctx->job.xnonce2, sctx->xnonce2_size);
+    free(work->job_id);
+    work->job_id = strdup(sctx->job.job_id);
+    work->xnonce2_len = sctx->xnonce2_size;
+    work->xnonce2 = realloc(work->xnonce2, sctx->xnonce2_size);
+    memcpy(work->xnonce2, sctx->job.xnonce2, sctx->xnonce2_size);
 
-        /* Generate merkle root */
-        sha256d(merkle_root, sctx->job.coinbase, sctx->job.coinbase_size);
-        for (i = 0; i < sctx->job.merkle_count; i++) {
-            memcpy(merkle_root + 32, sctx->job.merkle[i], 32);
-            sha256d(merkle_root, merkle_root, 64);
-        }
-
-        /* Increment extranonce2 */
-        for (i = 0; i < sctx->xnonce2_size && !++sctx->job.xnonce2[i]; i++)
-            ;
-
-        /* Assemble block header */
-        memset(work->data, 0, 128);
-        work->data[0] = le32dec(sctx->job.version);
-        for (i = 0; i < 8; i++)
-            work->data[1 + i] = le32dec((uint32_t *) sctx->job.prevhash + i);
-        for (i = 0; i < 8; i++)
-            work->data[9 + i] = be32dec((uint32_t *) merkle_root + i);
-        work->data[17] = le32dec(sctx->job.ntime);
-        work->data[18] = le32dec(sctx->job.nbits);
-        work->data[20] = 0x80000000;
-        work->data[31] = 0x00000280;
-
-        pthread_mutex_unlock(&sctx->work_lock);
-
-        if (opt_debug) {
-            char *xnonce2str = bin2hex(work->xnonce2, work->xnonce2_len);
-            applog(LOG_DEBUG, "DEBUG: job_id='%s' extranonce2=%s ntime=%08x",
-                    work->job_id, xnonce2str, swab32(work->data[17]));
-            free(xnonce2str);
-        }
-
-        if (opt_algo == ALGO_SCRYPT)
-            diff_to_target(work->target, sctx->job.diff / 65536.0);
-        else
-            diff_to_target(work->target, sctx->job.diff);
+    /* Generate merkle root */
+    sha256d(merkle_root, sctx->job.coinbase, sctx->job.coinbase_size);
+    for (i = 0; i < sctx->job.merkle_count; i++) {
+        memcpy(merkle_root + 32, sctx->job.merkle[i], 32);
+        sha256d(merkle_root, merkle_root, 64);
     }
+
+    /* Increment extranonce2 */
+    for (i = 0; i < sctx->xnonce2_size && !++sctx->job.xnonce2[i]; i++)
+        ;
+
+    /* Assemble block header */
+    memset(work->data, 0, 128);
+    work->data[0] = le32dec(sctx->job.version);
+    for (i = 0; i < 8; i++)
+        work->data[1 + i] = le32dec((uint32_t *) sctx->job.prevhash + i);
+    for (i = 0; i < 8; i++)
+        work->data[9 + i] = be32dec((uint32_t *) merkle_root + i);
+    work->data[17] = le32dec(sctx->job.ntime);
+    work->data[18] = le32dec(sctx->job.nbits);
+    work->data[20] = 0x80000000;
+    work->data[31] = 0x00000280;
+
+    pthread_mutex_unlock(&sctx->work_lock);
+
+    if (opt_debug) {
+        char *xnonce2str = bin2hex(work->xnonce2, work->xnonce2_len);
+        applog(LOG_DEBUG, "DEBUG: job_id='%s' extranonce2=%s ntime=%08x",
+                work->job_id, xnonce2str, swab32(work->data[17]));
+        free(xnonce2str);
+    }
+
+    if (opt_algo == ALGO_SCRYPT)
+        diff_to_target(work->target, sctx->job.diff / 65536.0);
+    else
+        diff_to_target(work->target, sctx->job.diff);
 }
 
 static void *miner_thread(void *userdata) {
@@ -1053,12 +1036,11 @@ static void *miner_thread(void *userdata) {
         int rc;
 
         if (have_stratum) {
-            while (!jsonrpc_2 && time(NULL) >= g_work_time + 120)
+            while (time(NULL ) >= g_work_time + 120)
                 sleep(1);
             pthread_mutex_lock(&g_work_lock);
             if ((*nonceptr) >= end_nonce
-           	    && !(jsonrpc_2 ? memcmp(work.data, g_work.data, 39) ||
-           	            memcmp(((uint8_t*) work.data) + 43, ((uint8_t*) g_work.data) + 43, 33)
+           	    && !(jsonrpc_2 ? memcmp(work.data, g_work.data, 39)
            	      : memcmp(work.data, g_work.data, 76)))
                 stratum_gen_work(&stratum, &g_work);
         } else {
@@ -1081,7 +1063,7 @@ static void *miner_thread(void *userdata) {
                 continue;
             }
         }
-        if (jsonrpc_2 ? memcmp(work.data, g_work.data, 39) || memcmp(((uint8_t*) work.data) + 43, ((uint8_t*) g_work.data) + 43, 33) : memcmp(work.data, g_work.data, 76)) {
+        if (jsonrpc_2 ? memcmp(work.data, g_work.data, 39) : memcmp(work.data, g_work.data, 76)) {
             work_free(&work);
             work_copy(&work, &g_work);
             nonceptr = (uint32_t*) (((char*)work.data) + (jsonrpc_2 ? 39 : 76));
@@ -1339,7 +1321,6 @@ static bool stratum_handle_response(char *buf) {
     json_t *val, *err_val, *res_val, *id_val;
     json_error_t err;
     bool ret = false;
-    bool valid = false;
 
     val = JSON_LOADS(buf, &err);
     if (!val) {
@@ -1354,20 +1335,8 @@ static bool stratum_handle_response(char *buf) {
     if (!id_val || json_is_null(id_val) || !res_val)
         goto out;
 
-    if(jsonrpc_2) {
-        json_t *status = json_object_get(res_val, "status");
-        if(status) {
-            const char *s = json_string_value(status);
-            valid = !strcmp(s, "OK") && json_is_null(err_val);
-        } else {
-            valid = json_is_null(err_val);
-        }
-    } else {
-        valid = json_is_true(res_val);
-    }
-
-    share_result(valid, NULL,
-            err_val ? (jsonrpc_2 ? json_string_value(err_val) : json_string_value(json_array_get(err_val, 1))) : NULL );
+    share_result(json_is_true(res_val), NULL,
+            err_val ? json_string_value(json_array_get(err_val, 1)) : NULL );
 
     ret = true;
     out: if (val)
@@ -1408,29 +1377,15 @@ static void *stratum_thread(void *userdata) {
             }
         }
 
-        if (jsonrpc_2) {
-            if (stratum.work.job_id
-                    && (!g_work_time
-                            || strcmp(stratum.work.job_id, g_work.job_id))) {
-                pthread_mutex_lock(&g_work_lock);
-                stratum_gen_work(&stratum, &g_work);
-                time(&g_work_time);
-                pthread_mutex_unlock(&g_work_lock);
+        if (stratum.job.job_id
+                && (!g_work_time || strcmp(stratum.job.job_id, g_work.job_id))) {
+            pthread_mutex_lock(&g_work_lock);
+            stratum_gen_work(&stratum, &g_work);
+            time(&g_work_time);
+            pthread_mutex_unlock(&g_work_lock);
+            if (stratum.job.clean) {
                 applog(LOG_INFO, "Stratum detected new block");
                 restart_threads();
-            }
-        } else {
-            if (stratum.job.job_id
-                    && (!g_work_time
-                            || strcmp(stratum.job.job_id, g_work.job_id))) {
-                pthread_mutex_lock(&g_work_lock);
-                stratum_gen_work(&stratum, &g_work);
-                time(&g_work_time);
-                pthread_mutex_unlock(&g_work_lock);
-                if (stratum.job.clean) {
-                    applog(LOG_INFO, "Stratum detected new block");
-                    restart_threads();
-                }
             }
         }
 
