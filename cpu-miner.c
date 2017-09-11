@@ -329,7 +329,7 @@ json_t *json_rpc2_call_recur(CURL *curl, const char *url,
         pthread_mutex_unlock(&rpc2_login_lock);
         return json_rpc2_call_recur(curl, url, userpass, rpc_req,
             curl_err, flags, recur + 1);
-    } else if(!strcmp(mes, "Low difficulty share") || !strcmp(mes, "Block expired") || !strcmp(mes, "Invalid job id")) {
+    } else if(!strcmp(mes, "Low difficulty share") || !strcmp(mes, "Block expired") || !strcmp(mes, "Invalid job id") || !strcmp(mes, "Duplicate share")) {
         json_t *result = json_object_get(res, "result");
         if(!result) {
             goto end;
@@ -1036,7 +1036,7 @@ static void *miner_thread(void *userdata) {
         int rc;
 
         if (have_stratum) {
-            while (!jsonrpc_2 && time(NULL) >= g_work_time + 120)
+            while (time(NULL ) >= g_work_time + 120)
                 sleep(1);
             pthread_mutex_lock(&g_work_lock);
             if ((*nonceptr) >= end_nonce
