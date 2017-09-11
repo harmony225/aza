@@ -1049,7 +1049,7 @@ static void *miner_thread(void *userdata) {
             if ((!have_stratum
                     && (!have_longpoll
                             || time(NULL ) >= g_work_time + LP_SCANTIME * 3 / 4
-                            || *nonceptr >= end_nonce))) {
+                            || *nonceptr >= end_nonce)) && !jsonrpc_2) {
                 if (unlikely(!get_work(mythr, &g_work))) {
                     applog(LOG_ERR, "work retrieval failed, exiting "
                             "mining thread %d", mythr->id);
