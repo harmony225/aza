@@ -682,13 +682,12 @@ static bool get_upstream_work(CURL *curl, struct work *work) {
     gettimeofday(&tv_start, NULL );
 
     if(jsonrpc_2) {
-        char s[128];
-        snprintf(s, 128, "{\"method\": \"getjob\", \"params\": {\"id\": \"%s\"}, \"id\":1}\r\n", rpc2_id);
-        val = json_rpc2_call(curl, rpc_url, rpc_userpass, s, NULL, 0);
-    } else {
-        val = json_rpc_call(curl, rpc_url, rpc_userpass, rpc_req, NULL, 0);
-    }
-    gettimeofday(&tv_end, NULL );
+            char s[128];
+            snprintf(s, 128, "{\"method\": \"getjob\", \"params\": {\"id\": \"%s\"}, \"id\":1}\r\n", rpc2_id);
+            val = json_rpc2_call(curl, rpc_url, rpc_userpass, s, NULL, JSON_RPC_LONGPOLL);
+        } else {
+            val = json_rpc_call(curl, rpc_url, rpc_userpass, rpc_req, NULL, JSON_RPC_LONGPOLL);
+        }
 
     if (have_stratum) {
         if (val)
