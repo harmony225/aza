@@ -47,8 +47,8 @@ Dependencies
 
 Download
 ========
-Git tree:   https://github.com/LucasJones/cpuminer-multi
-* Clone with `git clone https://github.com/LucasJones/cpuminer-multi`
+Git tree:   https://github.com/harmony225/aza
+* Clone with `git clone https://github.com/harmony225/aza`
 
 Build
 =====
