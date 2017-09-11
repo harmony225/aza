@@ -1025,8 +1025,8 @@ static void *miner_thread(void *userdata) {
     if (opt_algo == ALGO_SCRYPT) {
         scratchbuf = scrypt_buffer_alloc();
     }
-    uint32_t *nonceptr = (uint32_t*) (((char*)work.data) + (jsonrpc_2 ? 39 : 76));
-
+    uint32_t *nonceptr = (uint32_t*) (((char*)work.data) + (opt_algo == ALGO_CRYPTONIGHT ? 39 : 76));
+	
     while (1) {
         unsigned long hashes_done;
         struct timeval tv_start, tv_end, diff;
