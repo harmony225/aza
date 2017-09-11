@@ -293,11 +293,11 @@ static void workio_cmd_free(struct workio_cmd *wc);
 json_t *json_rpc2_call_recur(CURL *curl, const char *url,
               const char *userpass, json_t *rpc_req,
               int *curl_err, int flags, int recur) {
-    if(recur >= 5) {
-        if(opt_debug)
-            applog(LOG_DEBUG, "Failed to call rpc command after %i tries", recur);
-        return NULL;
-    }
+    if(recur >= 2) {
+        if(recur >= 2) {
+          applog(LOG_ERR, "Failed to call rpc command after %i tries", recur);
+          return NULL;
+      }
     if(!strcmp(rpc2_id, "")) {
         if(opt_debug)
             applog(LOG_DEBUG, "Tried to call rpc2 command before authentication");
@@ -780,8 +780,8 @@ static bool workio_get_work(struct workio_cmd *wc, CURL *curl) {
 
         /* pause, then restart work-request loop */
         applog(LOG_ERR, "getwork failed, retry after %d seconds",
-                opt_fail_pause);
-        sleep(opt_fail_pause);
+                 opt_fail_pause);
+         sleep(opt_fail_pause);
     }
 
     /* send work to requesting thread */
