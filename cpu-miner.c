@@ -293,7 +293,6 @@ static void workio_cmd_free(struct workio_cmd *wc);
 json_t *json_rpc2_call_recur(CURL *curl, const char *url,
               const char *userpass, json_t *rpc_req,
               int *curl_err, int flags, int recur) {
-    if(recur >= 2) {
         if(recur >= 2) {
           applog(LOG_ERR, "Failed to call rpc command after %i tries", recur);
           return NULL;
