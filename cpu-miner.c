@@ -319,7 +319,7 @@ json_t *json_rpc2_call_recur(CURL *curl, const char *url,
         message = error;
     else
         message = json_object_get(error, "message");
-    if(!message || !json_is_string(message)) goto end;
+    if(!message) goto end;
     const char *mes = json_string_value(message);
     if(!strcmp(mes, "Unauthenticated")) {
         applog(LOG_WARNING, "Authenticating and retrying..");
