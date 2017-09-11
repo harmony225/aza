@@ -122,6 +122,8 @@ struct cryptonight_ctx {
     uint8_t a[AES_BLOCK_SIZE] __attribute__((aligned(64)));
     uint8_t b[AES_BLOCK_SIZE] __attribute__((aligned(64)));
     uint8_t c[AES_BLOCK_SIZE] __attribute__((aligned(64)));
+    uint8_t d[AES_BLOCK_SIZE];
+    uint8_t aes_key[AES_KEY_SIZE];
     oaes_ctx* aes_ctx;
 };
 
